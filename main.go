@@ -12,7 +12,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-type requestParams map[string]string
+type requestParams map[string]interface{}
 
 type ErrorResponse struct {
 	Message     string `json:"message"`
@@ -20,7 +20,7 @@ type ErrorResponse struct {
 	Error       string `json:"error"`
 }
 
-type UploadLinkResponse struct {
+type LinkResponse struct {
 	Href      string `json:"href"`
 	Method    string `json:"method"`
 	Templated bool   `json:"templated"`
@@ -32,7 +32,7 @@ type Item struct {
 	Type string `json:"type"`
 }
 
-type EmbeddedStruct struct {
+type EmbeddedResponse struct {
 	ItemList []Item `json:"items"`
 	Limit    int    `json:"limit"`
 	Offset   int    `json:"offset"`
@@ -40,10 +40,10 @@ type EmbeddedStruct struct {
 }
 
 type ResourcesResponse struct {
-	Path     string         `json:"path"`
-	Name     string         `json:"name"`
-	Type     string         `json:"type"`
-	Embedded EmbeddedStruct `json:"_embedded"`
+	Path     string           `json:"path"`
+	Name     string           `json:"name"`
+	Type     string           `json:"type"`
+	Embedded EmbeddedResponse `json:"_embedded"`
 }
 
 type DiskClient struct {
@@ -67,22 +67,23 @@ func NewDiskClient() DiskClient {
 	return d
 }
 
-func concatParams(params requestParams) string {
-	if len(params) > 0 {
-		p := "?"
-		for key, val := range params {
-			p += key + "=" + val + "&"
+func (p requestParams) toString() string {
+	if len(p) > 0 {
+		pString := "?"
+		for key, val := range p {
+			pString += key + "=" + fmt.Sprintf("%v", val) + "&"
 		}
 		// return without tailing '&'
-		return p[:len(p)-1]
+		return pString[:len(pString)-1]
 	}
 
 	return ""
 }
-func (d DiskClient) makeRequest(method, endpoint string, params requestParams, bodyReq io.Reader) ([]byte, error) {
-	p := concatParams(params)
 
-	reqURL := d.URL + endpoint + p
+func (d DiskClient) makeRequest(method, reqURL string, params requestParams, bodyReq io.Reader) ([]byte, error) {
+	p := params.toString()
+
+	reqURL = reqURL + p
 	req, err := http.NewRequest(method, reqURL, bodyReq)
 	if err != nil {
 		return nil, err
@@ -117,12 +118,12 @@ func (d DiskClient) makeRequest(method, endpoint string, params requestParams, b
 func (d DiskClient) getUploadURL(pathOnDisk string) (string, error) {
 	params := requestParams{"path": pathOnDisk}
 
-	bodyResp, err := d.makeRequest("GET", "/resources/upload", params, nil)
+	bodyResp, err := d.makeRequest("GET", d.URL+"/resources/upload", params, nil)
 	if err != nil {
 		return "", err
 	}
 
-	link := UploadLinkResponse{}
+	link := LinkResponse{}
 	err = json.Unmarshal(bodyResp, &link)
 	if err != nil {
 		return "", err
@@ -135,13 +136,13 @@ func (d DiskClient) getUploadURL(pathOnDisk string) (string, error) {
 	return link.Href, nil
 }
 
-func (d DiskClient) uploadFile(uploadURL, filePath string) error {
+func (d DiskClient) uploadToDisk(uploadURL, path string) error {
 	args := []string{
 		"-X",
 		"PUT",
 		uploadURL,
 		"--upload-file",
-		filePath,
+		path,
 	}
 
 	cmd := exec.Command("curl", args...)
@@ -151,63 +152,52 @@ func (d DiskClient) uploadFile(uploadURL, filePath string) error {
 		return err
 	}
 
-	if len(stdout) > 0 {
-		return nil
+	log.Print(string(stdout))
+	return nil
+}
+
+func (d DiskClient) getDownloadURL(pathOnDisk string) (string, error) {
+	params := requestParams{"path": pathOnDisk}
+
+	bodyResp, err := d.makeRequest("GET", d.URL+"/resources/download", params, nil)
+	if err != nil {
+		return "", err
 	}
 
-	return fmt.Errorf("stdout doesn't emplty - %v", string(stdout))
+	link := LinkResponse{}
+	err = json.Unmarshal(bodyResp, &link)
+	if err != nil {
+		return "", nil
+	}
+
+	if link.Href == "" {
+		return "", fmt.Errorf("url for download file is empty")
+	}
+
+	return link.Href, nil
+}
+
+func (d DiskClient) downloadFromDisk(downloadURL, localPath string) error {
+	bodyReq, err := d.makeRequest("GET", downloadURL, nil, nil)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(localPath, bodyReq, 0777)
 }
 
 func main() {
 
 	d := NewDiskClient()
 
-	uploadURL, err := d.getUploadURL("/test_folder/heh")
+	url, err := d.getDownloadURL("/test_folder/heh")
+	// url, err := d.getUploadURL("/test_folder/heh")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	err = d.uploadFile(uploadURL, "heh")
+	err = d.downloadFromDisk(url, "/home/aosderzhikov/go/test1")
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// reqUrl := diskUrl + "/resources?path=/"
-
-	// req, err := http.NewRequest("GET", reqUrl, nil)
-	// if err != nil {
-	// 	fmt.Print(err)
-	// }
-	// req.Header.Set("Authorization", "OAuth "+token)
-
-	// resp, err := client.Do(req)
-	// if err != nil {
-	// 	fmt.Print(err)
-	// }
-
-	// if resp.StatusCode > 299 || resp.StatusCode < 200 {
-	// 	fmt.Printf("bad status code - %v", resp.StatusCode)
-	// }
-	// fmt.Print(resp.Status)
-	// defer resp.Body.Close()
-	// body, err := io.ReadAll(resp.Body)
-	// if err != nil {
-	// 	fmt.Print(err)
-	// }
-
-	// var fold ResourcesResponse
-
-	// if err = json.Unmarshal(body, &fold); err != nil {
-	// 	fmt.Print(err)
-	// }
-
-	// fmt.Print(fold)
-	// files, err := os.ReadDir(directory)
-	// if err != nil {
-	// 	fmt.Print(err)
-	// }
-
-	// for _, file := range files {
-	// 	fmt.Println(file.Name())
-	// }
 }
