@@ -10,6 +10,7 @@ import (
 	"os/exec"
 
 	"github.com/joho/godotenv"
+	"go.uber.org/zap"
 )
 
 type requestParams map[string]interface{}
@@ -50,6 +51,7 @@ type DiskClient struct {
 	URL        string
 	Token      string
 	ClientHTTP *http.Client
+	Logger     *zap.SugaredLogger
 }
 
 func NewDiskClient() DiskClient {
@@ -63,6 +65,10 @@ func NewDiskClient() DiskClient {
 	d.URL = os.Getenv("YANDEX_DISK_URL")
 	d.Token = os.Getenv("YANDEX_OAUTH_TOKEN")
 	d.ClientHTTP = &http.Client{}
+
+	logger, _ := zap.NewProduction()
+	defer logger.Sync() // flushes buffer, if any
+	d.Logger = logger.Sugar()
 
 	return d
 }
@@ -152,7 +158,9 @@ func (d DiskClient) uploadToDisk(uploadURL, path string) error {
 		return err
 	}
 
-	log.Print(string(stdout))
+	d.Logger.Infow("curl cmd is complete",
+		"stdout", string(stdout),
+	)
 	return nil
 }
 
@@ -186,18 +194,40 @@ func (d DiskClient) downloadFromDisk(downloadURL, localPath string) error {
 	return os.WriteFile(localPath, bodyReq, 0777)
 }
 
-func main() {
+func (d DiskClient) UploadAllFilesInDir() error {
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
 
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+
+	d.Logger.Infow("find files in current dir",
+		"dir", dir,
+		"files count", len(files),
+	)
+
+	for _, file := range files {
+		url, err := d.getUploadURL(file.Name())
+		d.Logger.Infof("url for upload file%v", url)
+		if err != nil {
+			return err
+		}
+
+		err = d.uploadToDisk(url, file.Name())
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func main() {
 	d := NewDiskClient()
 
-	url, err := d.getDownloadURL("/test_folder/heh")
-	// url, err := d.getUploadURL("/test_folder/heh")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = d.downloadFromDisk(url, "/home/aosderzhikov/go/test1")
-	if err != nil {
-		log.Fatal(err)
-	}
+	d.Logger.Fatal(d.UploadAllFilesInDir())
 }
